@@ -79,15 +79,51 @@ python main.py --url https://books.toscrape.com --query "What is the price of A 
 python evaluate.py                     # accuracy on tests/cases.json
 ```
 
-## Running on the AMD GPU notebook
+## Running the eval on the AMD GPU notebook (notebooks.amd.com)
 
-1. Open `notebooks.amd.com/hackathon` → Launch Notebook → open a Terminal.
-2. Work inside the persistent folder (`/persistent` or `/workspace`, see the League FAQ) and clone this repo there.
-3. `pip install -r requirements.txt && python -m playwright install chromium`
-   (if Chromium complains about missing system libraries: `python -m playwright install --with-deps chromium`)
-4. `bash scripts/start_vllm.sh` — serves `Qwen/Qwen2.5-7B-Instruct` on the AMD GPU.
-5. In `.env`, switch to Option B, then run `python evaluate.py`.
-6. **Turn the session off when finished** — the 3 h/day GPU quota counts idle time.
+The League gives **3 GPU hours per day, and idle time counts**, so prepare everything before you start the model,
+and shut the session down when you're done. Only about **25 GB** is persistent; the model weights (14B: ~30 GB,
+32B: ~65 GB) go on a bigger, non-persistent disk and are re-downloaded each session (a few minutes).
+
+**First session (setup, ~10 min before the model starts):**
+
+1. Open `notebooks.amd.com/hackathon` → *Launch Notebook* → open a *Terminal*.
+2. Pick the persistent folder from the notebook's URL: `jupyter-hack-…` → `/persistent`; `rgapi-hackathon-…` →
+   `/workspace`. Files anywhere else are lost when the session ends.
+   ```bash
+   export PERSIST=/persistent            # or /workspace (see above)
+   cd $PERSIST && git clone https://github.com/Prbhtsgh/web-agent.git && cd web-agent
+   ```
+3. A Python environment that persists and reuses the notebook's preinstalled PyTorch + vLLM:
+   ```bash
+   python -m venv --system-site-packages $PERSIST/venv && source $PERSIST/venv/bin/activate
+   pip install -r requirements.txt
+   export PLAYWRIGHT_BROWSERS_PATH=$PERSIST/ms-playwright && python -m playwright install chromium
+   ```
+   If Chromium later complains about missing system libraries: `python -m playwright install-deps chromium`.
+4. Choose a disk for the model weights: run `df -h /tmp $HOME /workspace /persistent` and pick the mount with the
+   most free space (needs ~35 GB for 14B, ~70 GB for 32B), e.g. `export HF_HOME=/tmp/hf`.
+5. Check the notebook can do the job: `bash scripts/check_notebook.sh`. It checks the GPU, vLLM, disk, internet
+   access to the eval websites and Hugging Face, and opens a real page with the headless browser. **If the internet
+   checks fail, stop**: the agent can't browse, so the eval can't run there. Shut down so you don't waste quota.
+
+**Every session (after setup):**
+
+```bash
+export PERSIST=/persistent                                   # or /workspace
+cd $PERSIST/web-agent && git pull && source $PERSIST/venv/bin/activate
+export PLAYWRIGHT_BROWSERS_PATH=$PERSIST/ms-playwright HF_HOME=/tmp/hf    # HF_HOME: the big disk from step 4
+bash scripts/start_vllm.sh            # picks Qwen2.5-32B (>=120 GB GPU) or 14B (48 GB GPU); prints an export line
+export LLM_BASE_URL=http://localhost:8000/v1 LLM_API_KEY=EMPTY LLM_MODEL=<model it printed>
+python main.py --url https://books.toscrape.com --query "What is the price of A Light in the Attic?"   # smoke test
+python evaluate.py 2>&1 | tee results/eval_amd_$(date +%Y%m%d_%H%M).log                                 # all 30 cases
+```
+
+Then save and stop:
+- The eval JSON is in `$PERSIST/web-agent/results/` (persistent). Download it from the Jupyter file browser
+  (right-click → *Download*) into `results/` on your own machine; `results/` is not committed to git.
+- `pkill -f "vllm serve"`, then shut the session down (*File → Hub Control Panel → Stop My Server*), because idle
+  time still counts against the 3 hours.
 
 ## Batch mode
 
@@ -99,7 +135,7 @@ python main.py --url ... --query ... --full                  # full step-by-step
 ## Status
 
 - [x] Core agent loop, browser, extractor, verification, backtracking
-- [x] Offline test suite (13 tests)
-- [ ] Results with a real model on `tests/cases.json`
-- [ ] Run on AMD GPU via vLLM
+- [x] Offline test suite (33 tests, local test website + scripted model)
+- [x] 30 verified eval cases across 9 site types: **28/30 with qwen2.5:7b** on a Mac
+- [ ] Eval on the AMD GPU via vLLM (larger model)
 - [ ] Adapt `main.py` to the official Match 4 input/output format
