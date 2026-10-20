@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web Agent Demo</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #16181d; --muted: #5d6470; --line: #e2e5ea;
+    --accent: #2457d6; --accent-text: #ffffff;
+    --visit: #2457d6; --answer: #12805c; --back: #5d6470; --giveup: #b45309; --error: #c2312f; --recheck: #7a3fc2;
+    --ok-bg: #e6f4ee; --ok: #12805c; --warn-bg: #fdf3e2; --warn: #9a5b06;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111317; --panel: #1a1d23; --text: #e8eaee; --muted: #9aa1ad; --line: #2b3039;
+      --accent: #5b8cff; --accent-text: #0b0d10;
+      --visit: #7aa2ff; --answer: #4cc59a; --back: #9aa1ad; --giveup: #f0a647; --error: #f07171; --recheck: #b98cf2;
+      --ok-bg: #15332a; --ok: #4cc59a; --warn-bg: #3a2c12; --warn: #f0a647;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  form { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px;
+         display: grid; gap: 10px; }
+  label { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+  input { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+          border-radius: 8px; padding: 10px 12px; width: 100%; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 10px 22px; cursor: pointer;
+           background: var(--accent); color: var(--accent-text); }
+  button.stop { background: var(--error); }
+  .examples { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { font-size: 13px; font-weight: 500; padding: 4px 10px; border-radius: 999px; background: transparent;
+          color: var(--muted); border: 1px solid var(--line); }
+  .chip:hover { color: var(--text); }
+  .status { color: var(--muted); font-size: 14px; margin-left: auto; }
+  #timeline { display: grid; gap: 14px; margin-top: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .card header { padding: 12px 16px; display: grid; gap: 2px; }
+  .step-no { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .title { font-weight: 600; }
+  .url { font-size: 13px; color: var(--accent); word-break: break-all; }
+  .shot { display: block; width: 100%; max-height: 360px; object-fit: cover; object-position: top;
+          border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); cursor: zoom-in; }
+  .shot.big { max-height: none; cursor: zoom-out; }
+  .decisions { padding: 10px 16px 14px; display: grid; gap: 8px; }
+  .decision { display: flex; gap: 10px; align-items: baseline; }
+  .badge { flex: none; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 6px; color: #fff;
+           text-transform: uppercase; letter-spacing: .03em; }
+  .b-visit { background: var(--visit); } .b-answer { background: var(--answer); } .b-back { background: var(--back); }
+  .b-give_up { background: var(--giveup); } .b-error, .b-fatal { background: var(--error); }
+  .b-recheck { background: var(--recheck); }
+  .note { color: var(--muted); font-style: italic; }
+  .thinking { color: var(--muted); }
+  .result { padding: 18px 16px; display: grid; gap: 8px; border-width: 2px; }
+  .result .label { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .answer { font-size: 24px; font-weight: 700; word-break: break-word; }
+  .evidence { color: var(--muted); font-size: 14px; }
+  .verified { justify-self: start; font-size: 13px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .v-yes { background: var(--ok-bg); color: var(--ok); } .v-no { background: var(--warn-bg); color: var(--warn); }
+  .meta { color: var(--muted); font-size: 13px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Web Agent: live demo</h1>
+  <p class="sub">Give it a website and a question. It browses page by page and shows every step it takes.</p>
+
+  <form id="form">
+    <label>Website to start from <input id="url" type="url" required value="https://books.toscrape.com/"></label>
+    <label>Question <input id="q" type="text" required value="How many books are in stock for 'A Light in the Attic'?"></label>
+    <div class="row">
+      <button id="go" type="submit">Go</button>
+      <div class="examples" aria-label="Examples">
+        <button class="chip" type="button" data-url="https://quotes.toscrape.com/"
+          data-q="Where was the author of the quote 'A day without sunshine is like, you know, night.' born?">Quote author</button>
+        <button class="chip" type="button" data-url="https://www.nps.gov/yell/index.htm"
+          data-q="How much does a standard entrance pass to Yellowstone National Park cost?">Park fee</button>
+        <button class="chip" type="button" data-url="https://en.wikipedia.org/wiki/AMD"
+          data-q="In which city was AMD co-founder Jerry Sanders born?">Wikipedia</button>
+      </div>
+      <span class="status" id="status"></span>
+    </div>
+  </form>
+
+  <section id="timeline" aria-live="polite"></section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const timeline = $("timeline");
+let source = null, timer = null, started = 0, currentCard = null;
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;  // always text, never HTML: page content is untrusted
+  return node;
+}
+
+function link(href, cls) {
+  const a = el("a", cls, href);
+  a.href = href; a.target = "_blank"; a.rel = "noopener";
+  return a;
+}
+
+function setRunning(running) {
+  $("go").textContent = running ? "Stop" : "Go";
+  $("go").classList.toggle("stop", running);
+  clearInterval(timer);
+  if (running) {
+    started = Date.now();
+    timer = setInterval(() => { $("status").textContent = `Working… ${Math.round((Date.now() - started) / 1000)}s`; }, 500);
+  }
+}
+
+function stop(message) {
+  if (source) source.close();
+  source = null;
+  setRunning(false);
+  if (message) $("status").textContent = message;
+}
+
+function closeCurrentCard() {
+  // A page that got no decision was not read by the agent (it left the website, e.g. a login redirect).
+  if (currentCard && !currentCard.querySelector(".decision")) {
+    currentCard.querySelector(".decisions").replaceChildren(el("div", "note", "Not read: the agent skipped this page."));
+  }
+}
+
+function addDecision(action, detail, recheck) {
+  const box = currentCard ? currentCard.querySelector(".decisions") : timeline;
+  box.querySelector(".thinking")?.remove();
+  const row = el("div", "decision");
+  if (recheck) row.append(el("span", "badge b-recheck", "re-check"));
+  row.append(el("span", `badge b-${action}`, action.replace("_", " ")), el("span", "", detail));
+  box.append(row);
+}
+
+const handlers = {
+  start(e) { $("status").textContent = `Model: ${e.model}`; },
+  page(e) {
+    closeCurrentCard();
+    const card = el("article", "card");
+    const head = el("header");
+    head.append(el("span", "step-no", `Step ${e.step}`), el("span", "title", e.title || "(no title)"), link(e.url, "url"));
+    const shot = el("img", "shot");
+    shot.src = e.screenshot; shot.alt = `Screenshot of ${e.url}`;
+    shot.onclick = () => shot.classList.toggle("big");
+    const decisions = el("div", "decisions");
+    decisions.append(el("div", "thinking", "Reading the page and deciding…"));
+    card.append(head, shot, decisions);
+    timeline.append(card);
+    currentCard = card;
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+  },
+  decision(e) { addDecision(e.action, e.detail, e.recheck); },
+  error(e) {
+    closeCurrentCard();
+    const card = el("article", "card");
+    const box = el("div", "decisions");
+    const row = el("div", "decision");
+    row.append(el("span", "badge b-error", "error"), el("span", "", e.detail));
+    box.append(row);
+    card.append(box);
+    timeline.append(card);
+    currentCard = null;
+  },
+  result(e) {
+    closeCurrentCard();
+    const card = el("article", "card result");
+    if (e.found) {
+      card.append(el("span", "label", "Answer"), el("div", "answer", e.answer));
+      if (e.evidence) card.append(el("div", "evidence", `“${e.evidence}”`));
+      const src = el("div", "meta", "Source: ");
+      src.append(link(e.source));
+      card.append(src, el("span", `verified ${e.verified ? "v-yes" : "v-no"}`,
+                          e.verified ? "✓ Verified on the page" : "Not verified"));
+    } else {
+      card.append(el("span", "label", "Result"), el("div", "answer", "Not found on this website"));
+      if (e.error) card.append(el("div", "evidence", e.error));
+    }
+    card.append(el("div", "meta", `${e.pages_opened} page(s) read in ${e.seconds}s`));
+    timeline.append(card);
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    stop(e.found ? "Done" : "Done: no answer");
+  },
+  fatal(e) {
+    const card = el("article", "card result");
+    card.append(el("span", "label", "Something went wrong"), el("div", "evidence", e.detail));
+    timeline.append(card);
+    stop("Stopped");
+  },
+};
+
+$("form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (source) return stop("Stopped");
+  timeline.replaceChildren();
+  currentCard = null;
+  const params = new URLSearchParams({ url: $("url").value.trim(), q: $("q").value.trim() });
+  source = new EventSource(`/run?${params}`);
+  source.onmessage = (msg) => { const e = JSON.parse(msg.data); (handlers[e.type] || (() => {}))(e); };
+  source.onerror = () => { if (source) stop("Connection lost: is the demo server still running?"); };
+  setRunning(true);
+});
+
+document.querySelectorAll(".chip").forEach((chip) => chip.addEventListener("click", () => {
+  $("url").value = chip.dataset.url;
+  $("q").value = chip.dataset.q;
+}));
+</script>
+</body>
+</html>

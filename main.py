@@ -2,6 +2,7 @@
 
 One question:
     python main.py --url https://books.toscrape.com --query "What is the price of A Light in the Attic?"
+    (add --show-browser to watch the Chromium window while it browses)
 
 A batch of tasks (JSON list of {"id", "url", "query"}):
     python main.py --input tasks.json --output results.json
@@ -46,6 +47,7 @@ def main() -> int:
     parser.add_argument("--max-steps", type=int, help="Override MAX_STEPS")
     parser.add_argument("--full", action="store_true", help="Include the full step-by-step trace")
     parser.add_argument("--quiet", action="store_true", help="Hide the live step log")
+    parser.add_argument("--show-browser", action="store_true", help="Show the Chromium window while the agent browses")
     args = parser.parse_args()
 
     if args.input:
@@ -59,6 +61,8 @@ def main() -> int:
     settings = load_settings()
     if args.max_steps:
         settings.max_steps = args.max_steps
+    if args.show_browser:
+        settings.headless = False
 
     outputs = []
     with Browser(timeout_ms=settings.page_timeout_ms, headless=settings.headless) as browser:

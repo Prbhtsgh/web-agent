@@ -54,6 +54,8 @@ Reliability features:
 | `evaluate.py` | Runs `tests/cases.json` and reports accuracy |
 | `tests/` | Offline tests with a local test website |
 | `scripts/start_vllm.sh` | Serves a model on the AMD GPU with vLLM |
+| `scripts/check_notebook.sh` | Checks an AMD notebook is ready: GPU, vLLM, disk, internet, browser |
+| `demo/` | Live demo page: streams each step with a screenshot (`python demo/app.py`) |
 
 ## Setup (Mac)
 
@@ -78,6 +80,22 @@ python -m unittest discover tests     # offline tests, no model needed
 python main.py --url https://books.toscrape.com --query "What is the price of A Light in the Attic?"
 python evaluate.py                     # accuracy on tests/cases.json
 ```
+
+## Demo mode
+
+A local web page for showing the agent to people. Type a website and a question, press **Go**, and every step
+appears live: the page it opened (with a screenshot), what it decided and why, then the answer, its source link and
+a **Verified** badge.
+
+```bash
+python demo/app.py                  # opens http://localhost:8765 in your browser
+python demo/app.py --show-browser   # also shows the real Chromium window while it browses
+```
+
+It uses the same model settings as everything else (`.env`), so start Ollama (or vLLM) first. The demo doesn't
+change the agent: it gives it a browser that also takes screenshots and a model wrapper that reports each decision.
+It only listens on `localhost`. To watch the agent from the command line instead:
+`python main.py --url ... --query "..." --show-browser`.
 
 ## Running the eval on the AMD GPU notebook (notebooks.amd.com)
 
@@ -130,12 +148,14 @@ Then save and stop:
 ```bash
 python main.py --input tasks.json --output results.json      # tasks.json: [{"id", "url", "query"}, ...]
 python main.py --url ... --query ... --full                  # full step-by-step trace
+python main.py --url ... --query ... --show-browser          # watch the Chromium window while it browses
 ```
 
 ## Status
 
 - [x] Core agent loop, browser, extractor, verification, backtracking
-- [x] Offline test suite (33 tests, local test website + scripted model)
+- [x] Offline test suite (35 tests, local test website + scripted model)
 - [x] 30 verified eval cases across 9 site types: **28/30 with qwen2.5:7b** on a Mac
+- [x] Live demo page (`python demo/app.py`)
 - [ ] Eval on the AMD GPU via vLLM (larger model)
 - [ ] Adapt `main.py` to the official Match 4 input/output format
