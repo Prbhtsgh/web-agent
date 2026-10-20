@@ -12,7 +12,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from webagent import Browser, WebAgent
-from webagent.agent import is_non_answer, is_supported
+from webagent.agent import is_non_answer, is_supported, missing_names
 from webagent.extractor import normalize_url, parse_html, rank_links, top_passages, trim_text
 from webagent.llm import parse_json
 
@@ -74,6 +74,24 @@ class ScriptedLLM:
                 if keyword in link_text.lower():
                     return {"action": "visit", "link_id": int(link_id), "reason": f"contains '{keyword}'"}
         return {"action": "back", "reason": "dead end"}
+
+
+class SimilarItemLLM:
+    """Answers with the first price on the page that sits next to a tablet whose name contains "iPad" (like the
+    real model taking the iPad Mini for the iPad Air); after a subject re-check it moves to the next page."""
+
+    def __init__(self):
+        self.subject_rechecks = 0
+
+    def decide(self, messages):
+        prompt = messages[1]["content"]
+        if messages[-1]["role"] == "user" and "not about what the question names" in messages[-1]["content"]:
+            self.subject_rechecks += 1
+            link = re.search(r"^\[(\d+)\] Page 2", prompt, re.M)
+            return {"action": "visit", "link_id": int(link.group(1)), "reason": "wrong tablet"}
+        text = prompt.split("PAGE TEXT:\n", 1)[1].split("\n\nLINKS:\n", 1)[0]
+        line = next(l for l in text.splitlines() if "iPad" in l)
+        return {"action": "answer", "answer": line.split(" · ")[0], "evidence": line}
 
 
 class AgentTests(unittest.TestCase):
@@ -203,6 +221,14 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(result.steps[0]["action"], "error")
         self.assertIn("Redirected off the website", result.steps[0]["detail"])
 
+    def test_answer_about_a_similar_item_is_rechecked(self):
+        # Real failure (webscraper.io): asked for the Apple iPad Air, the model answered the iPad Mini's price.
+        llm = SimilarItemLLM()
+        result = self.agent(llm).run(self.base + "tablets.html", "What is the price of the Apple iPad Air tablet?")
+        self.assertEqual(llm.subject_rechecks, 1)
+        self.assertEqual(result.answer, "$603.99", result.steps)
+        self.assertTrue(result.source.split("?")[0].endswith("tablets-2.html"))
+
     def test_missing_page_is_reported_not_crashing(self):
         llm = ScriptedLLM(r"never (x)", [])
         result = self.agent(llm, max_steps=2).run(self.base + "does-not-exist.html", "anything")
@@ -221,6 +247,14 @@ class VerificationTests(unittest.TestCase):
         self.assertTrue(is_supported("Maximum Number Of Columns", "32767", self.PAGE, [self.PAGE]))  # answer is on the page
         self.assertTrue(is_supported(quote, "the column limit", self.PAGE, [self.PAGE]))  # no numbers: quote is enough
 
+
+    def test_question_names_must_be_near_the_evidence(self):
+        page = parse_html("<title>Tablets</title><body><div>$537.99 · iPad Mini Reti... · 32GB</div><p>x</p><p>y</p>"
+                          "<p>z</p><p>w</p><div>$603.99 · Apple iPad Air · 64GB</div></body>", "https://shop.test/t")
+        question = "What is the price of the Apple iPad Air tablet?"
+        self.assertEqual(missing_names(question, "$537.99 · iPad Mini Reti...", page), ["Air", "Apple"])
+        self.assertEqual(missing_names(question, "$603.99 · Apple iPad Air", page), [])
+        self.assertEqual(missing_names("Who said 'Try not to become a man of success'?", "by Albert Einstein", page), [])
 
     def test_non_answers(self):
         for text in ["None", "none.", "N/A", "Not mentioned", "not found", "No information available", ""]:

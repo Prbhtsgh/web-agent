@@ -68,6 +68,12 @@ EVIDENCE_RETRY = (
     "If it is not there, choose another action (visit or back). Reply with one JSON object."
 )
 
+SUBJECT_RETRY = (
+    "Your evidence is not about what the question names: the page text around your quote never mentions {names}. "
+    "Answer only about exactly the item the question names, not a similar one. If this page does not have it, "
+    "choose visit or back. Reply with one JSON object."
+)
+
 GIVE_UP_RETRY = (
     "You chose give_up, which ends the WHOLE search. You have opened only {pages} page(s) and this website "
     "still has unvisited links. If only THIS page lacks the answer, choose back (or visit a promising link) "

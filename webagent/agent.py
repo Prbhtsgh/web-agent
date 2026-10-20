@@ -12,8 +12,9 @@ from dataclasses import asdict, dataclass, field
 from urllib.parse import urlparse
 
 from .browser import FetchError
-from .extractor import link_score, normalize_url, parse_html, rank_links, top_passages, trim_text
-from .prompts import EVIDENCE_RETRY, GIVE_UP_RETRY, SYSTEM_PROMPT, build_user_prompt
+from .extractor import (Page, link_score, normalize_url, parse_html, rank_links, stem, tokenize, top_passages,
+                        trim_text)
+from .prompts import EVIDENCE_RETRY, GIVE_UP_RETRY, SUBJECT_RETRY, SYSTEM_PROMPT, build_user_prompt
 
 
 @dataclass
@@ -103,6 +104,45 @@ def is_supported(evidence: str | None, answer: str | None, current_text: str, al
     return False
 
 
+QUESTION_WORDS = {"what", "who", "where", "when", "which", "how", "why", "in", "on", "since", "according", "is",
+                  "are", "does", "do", "the", "a", "an", "of", "for"}
+
+
+def question_names(query: str) -> dict[str, str]:
+    """Things the question names: capitalised words after the first word, and words like "iPad".
+    Quoted text ('A Light in the Attic', a quote) is skipped: it is matched elsewhere and often not repeated.
+    Returns {stemmed token: word as written}."""
+    words = re.findall(r"[A-Za-z][\w.+-]*", re.sub(r"'[^']*'|\"[^\"]*\"|‘[^’]*’|“[^”]*”", " ", query))
+    names: dict[str, str] = {}
+    for i, word in enumerate(words):
+        if i == 0 or word.lower() in QUESTION_WORDS:
+            continue
+        if word[0].isupper() or re.search(r"[a-z][A-Z]", word):
+            for token in tokenize(word):
+                names[stem(token)] = word
+    return names
+
+
+def missing_names(query: str, evidence: str | None, page: Page) -> list[str]:
+    """Names from the question that appear neither in the evidence, nor within 2 lines of it, nor in the page title.
+
+    Catches answers about the wrong item: asked for the "Apple iPad Air", the model quoted the iPad Mini's price
+    (webscraper.io), or a nationwide fee table that never mentions Yellowstone (nps.gov). On all 38 correct
+    answers from past evals this rejected none."""
+    names = question_names(query)
+    if not names:
+        return []
+    lines = page.text.splitlines()
+    first = _clean((evidence or "").splitlines()[0]) if evidence and evidence.strip() else ""
+    near = []
+    if first:
+        for i, line in enumerate(lines):
+            if first[:40] in _clean(line):
+                near += lines[max(0, i - 2): i + 3]
+    words = {stem(t) for t in tokenize(" ".join(near) + " " + page.title + " " + (evidence or ""))}
+    return sorted({word for token, word in names.items() if token not in words})
+
+
 class WebAgent:
     def __init__(self, llm, browser, max_steps=8, max_page_chars=6000, max_links=40,
                  same_domain_only=True, verbose=True, max_errors=8):
@@ -122,7 +162,17 @@ class WebAgent:
     def _allowed(self, url: str, start_site: str) -> bool:
         return not self.same_domain_only or _site(urlparse(url).hostname) == start_site
 
-    def _decide(self, messages: list[dict], current_text: str, all_texts: list[str],
+    def _problem(self, decision: dict, query: str, page: Page, all_texts: list[str]) -> str | None:
+        """None when the answer is backed by the page; otherwise the message asking the model to re-check."""
+        evidence, answer = _as_text(decision.get("evidence")), _as_text(decision.get("answer"))
+        if not is_supported(evidence, answer, page.text, all_texts):
+            return EVIDENCE_RETRY
+        missing = missing_names(query, evidence, page)
+        if missing:
+            return SUBJECT_RETRY.format(names=", ".join(missing))
+        return None
+
+    def _decide(self, messages: list[dict], query: str, page: Page, all_texts: list[str],
                 can_backtrack: bool = False) -> tuple[dict, bool]:
         decision = self.llm.decide(messages)
         if decision.get("action") == "give_up" and can_backtrack:
@@ -139,19 +189,18 @@ class WebAgent:
                     "reason": f"answered {_as_text(decision.get('answer'))!r}, i.e. not found on this page"}, False
         if decision.get("action") != "answer":
             return decision, False
-        if is_supported(_as_text(decision.get("evidence")), _as_text(decision.get("answer")), current_text, all_texts):
+        problem = self._problem(decision, query, page, all_texts)
+        if problem is None:
             return decision, True
-        # The quote didn't match the page: give the model one chance to correct itself.
-        self._log("    evidence not found on page; asking the model to re-check")
-        retry = messages + [
+        # The quote isn't on the page, or isn't about what was asked: give the model one chance to correct itself.
+        self._log(f"    answer not backed by the page; asking the model to re-check ({problem[:60]}...)")
+        second = self.llm.decide(messages + [
             {"role": "assistant", "content": json.dumps(decision, ensure_ascii=False)},
-            {"role": "user", "content": EVIDENCE_RETRY},
-        ]
-        second = self.llm.decide(retry)
+            {"role": "user", "content": problem},
+        ])
         if second.get("action") != "answer":
             return second, False
-        ok = is_supported(_as_text(second.get("evidence")), _as_text(second.get("answer")), current_text, all_texts)
-        return second, ok
+        return second, self._problem(second, query, page, all_texts) is None
 
     def run(self, url: str, query: str) -> AgentResult:
         started = time.time()
@@ -234,7 +283,7 @@ class WebAgent:
             try:
                 can_backtrack = result.pages_opened < self.max_steps and any(
                     normalize_url(u) not in visited_keys for _, _, u in frontier)
-                decision, verified = self._decide(messages, page.text, page_texts, can_backtrack)
+                decision, verified = self._decide(messages, query, page, page_texts, can_backtrack)
             except Exception as exc:  # model unreachable or unusable: stop and report it
                 result.error = f"Model error: {exc}"
                 self._log(f"[{step}] {result.error}")

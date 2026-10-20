@@ -349,7 +349,7 @@ def trim_text(text: str, query: str, max_chars: int) -> str:
     return "\n".join(out)[:max_chars]
 
 
-def _stem(word: str) -> str:
+def stem(word: str) -> str:
     """Crude plural folding so "pass" matches "Passes" and "fee" matches "fees"."""
     if len(word) > 4 and word.endswith("ies"):
         return word[:-3] + "y"
@@ -366,10 +366,10 @@ def link_score(link: Link, query: str, title: str = "") -> float:
     Question words that also appear in the current page's title (usually the site's own name, e.g.
     "Yellowstone National Park") describe every link on the site, so they count a third as much. Without
     this, on nps.gov "Birth of a National Park" outranked "Fees & Passes" (rank 47 of 327, never shown)."""
-    title_words = {_stem(w) for w in tokenize(title)}
-    words = {_stem(w) for w in tokenize(link.text) + tokenize(urlparse(link.url).path)}
+    title_words = {stem(w) for w in tokenize(title)}
+    words = {stem(w) for w in tokenize(link.text) + tokenize(urlparse(link.url).path)}
     score = 0.0
-    for q in {_stem(w) for w in tokenize(query)}:
+    for q in {stem(w) for w in tokenize(query)}:
         weight = 1.0 if q in title_words else 3.0
         if q in words:
             score += weight
