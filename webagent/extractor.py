@@ -21,6 +21,8 @@ BLOCK_TAGS = [
     "summary", "form", "fieldset", "address", "hr", "caption",
 ]
 HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6", "dt"]
+# A table row containing any of these holds page layout, not data (see _is_layout_row).
+LAYOUT_TAGS = ["table", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article", "main", "header", "footer", "form"]
 
 STOPWORDS = {
     "a", "an", "the", "is", "are", "was", "were", "be", "of", "to", "in", "on", "for",
@@ -66,6 +68,12 @@ def normalize_url(url: str) -> str:
     return f"{host}{path}{query}"
 
 
+def _is_layout_row(row) -> bool:
+    """Older sites wrap the whole page in a <table>. Flattening such a row into "a | b" would put the
+    entire page on one line (seen on nps.gov: 13,000 of 14,700 characters), so only data rows are flattened."""
+    return row.find(LAYOUT_TAGS) is not None
+
+
 def parse_html(html: str, base_url: str) -> Page:
     soup = BeautifulSoup(html, "lxml")
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
@@ -106,8 +114,13 @@ def parse_html(html: str, base_url: str) -> Page:
         if "\n" in text or "\t" in text or "  " in text:
             if node.find_parent(["pre", "textarea"]) is None:
                 node.replace_with(re.sub(r"\s+", " ", text))
-    # Keep table rows readable: "cell | cell | cell" on one line.
+    # Keep data-table rows readable: "cell | cell | cell" on one line. Layout rows keep their structure.
     for row in soup.find_all("tr"):
+        if _is_layout_row(row):
+            for cell in row.find_all(["th", "td"], recursive=False):
+                cell.insert_before(soup.new_string("\n"))
+                cell.insert_after(soup.new_string("\n"))
+            continue
         cells = [" ".join(c.get_text(" ", strip=True).split()) for c in row.find_all(["th", "td"])]
         row.replace_with(soup.new_string("\n" + " | ".join(c for c in cells if c) + "\n"))
     for br in soup.find_all("br"):
@@ -132,11 +145,29 @@ def parse_html(html: str, base_url: str) -> Page:
     return Page(url=base_url, title=title, text="\n".join(lines), links=links)
 
 
+def _split_long_line(line: str, size: int) -> list[str]:
+    """Cut a very long line at spaces into pieces of about `size` characters."""
+    pieces, current = [], ""
+    for word in line.split(" "):
+        if current and len(current) + len(word) + 1 > size:
+            pieces.append(current)
+            current = word
+        else:
+            current = f"{current} {word}" if current else word
+    if current:
+        pieces.append(current)
+    return pieces
+
+
 def _split_chunks(text: str, size: int = 400) -> list[str]:
+    """Group lines into ~`size`-character chunks. A single huge line is cut up first, otherwise it becomes
+    one chunk bigger than the whole trim budget and is silently dropped."""
     chunks: list[str] = []
     current: list[str] = []
     length = 0
-    for line in text.splitlines():
+    lines = [piece for line in text.splitlines()
+             for piece in (_split_long_line(line, size) if len(line) > 2 * size else [line])]
+    for line in lines:
         current.append(line)
         length += len(line) + 1
         if length >= size:

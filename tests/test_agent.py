@@ -238,6 +238,31 @@ class ExtractorTests(unittest.TestCase):
         first = top_passages(page.text, "What does the str.removeprefix method do?").split("\n---\n")[0]
         self.assertIn("If the string starts with the prefix string", first)
 
+    def test_layout_table_page_keeps_its_lines(self):
+        # Shaped like nps.gov: the whole page sits inside a layout <table>, with headings and lists inside
+        # a cell, plus a real data table. Flattening the layout row put the page on one line and the
+        # fee never reached the model.
+        filler = "".join(f"<p>Visitor tip {i}: check road status and weather before you travel.</p>" for i in range(150))
+        html = f"""<html><body><table class="CS_Layout"><tr class="CS_Layout_TR">
+        <td class="CS_Layout_TD">menu</td><td class="CS_Layout_TD"><section><h2>Fees and Passes</h2>{filler}
+        <ul><li>The fee for a Standard entrance pass is $20.00\u2013$35.00.</li></ul>
+        <h3>Annual Pass</h3><p>$70.00</p>{filler}
+        <table><tr><th>Pass</th><th>Price</th></tr><tr><td>Motorcycle</td><td>$30.00</td></tr></table>
+        </section></td></tr></table></body></html>"""
+        page = parse_html(html, "https://park.test/fees.htm")
+        self.assertLess(max(len(line) for line in page.text.splitlines()), 300)
+        self.assertIn("\nThe fee for a Standard entrance pass is $20.00\u2013$35.00.\n", page.text)
+        self.assertIn("## Annual Pass", page.text)
+        self.assertIn("Motorcycle | $30.00", page.text)  # data tables are still flattened
+        question = "How much is a standard entrance pass?"
+        self.assertIn("Standard entrance pass is $20.00", trim_text(page.text, question, 6000))
+        self.assertIn("Standard entrance pass is $20.00", top_passages(page.text, question))
+
+    def test_trim_handles_one_huge_line(self):
+        filler = " ".join(f"Unrelated sentence number {i} about nothing." for i in range(600))
+        text = "Heading\n" + filler + " The hostel fee is 60000 per year. " + filler
+        self.assertIn("hostel fee is 60000", trim_text(text, "hostel fee", 3000))
+
     def test_normalize_url(self):
         self.assertEqual(normalize_url("https://www.a.com/x/index.html#y"), normalize_url("http://a.com/x/"))
 
