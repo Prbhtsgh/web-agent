@@ -27,15 +27,26 @@ class ScriptedLLM:
     """Pretends to be the model: answers when a regex matches the page text, otherwise clicks links
     whose text contains the next keyword. Records every prompt so tests can inspect them."""
 
-    def __init__(self, answer_regex, keywords, bad_evidence_first=False):
+    def __init__(self, answer_regex, keywords, bad_evidence_first=False, give_up_on=None, insist_give_up=False):
         self.answer_regex = re.compile(answer_regex, re.I)
         self.keywords = [k.lower() for k in keywords]
         self.bad_evidence_first = bad_evidence_first
+        self.give_up_on = give_up_on  # URL fragment of a page where it wrongly gives up on the whole site
+        self.insist_give_up = insist_give_up
+        self.give_up_rechecks = 0
         self.prompts = []
 
     def decide(self, messages):
         prompt = messages[1]["content"]
         self.prompts.append(prompt)
+        if messages[-1]["role"] == "user" and "ends the WHOLE search" in messages[-1]["content"]:
+            self.give_up_rechecks += 1
+            if self.insist_give_up:
+                return {"action": "give_up", "reason": "still sure"}
+            return {"action": "back", "reason": "only this page lacks it"}
+        page_url = re.search(r"^CURRENT PAGE URL: (\S+)", prompt, re.M).group(1)
+        if self.give_up_on and self.give_up_on in page_url:
+            return {"action": "give_up", "reason": "The page does not mention it."}
         if messages[-1]["role"] == "user" and "evidence was not found" in messages[-1]["content"]:
             self.bad_evidence_first = False
             prompt = messages[1]["content"]
@@ -116,6 +127,22 @@ class AgentTests(unittest.TestCase):
         result = self.agent(llm).run(self.base + "index.html", "MTech deadline?")
         self.assertTrue(result.found)
         self.assertTrue(result.verified)
+
+    def test_give_up_on_an_off_topic_page_is_rechecked(self):
+        # Real failure (docs.python.org): on an off-topic page the model said "the page does not mention it"
+        # and chose give_up, ending the run after 3 of 8 pages. Backtracking would have found the answer.
+        llm = ScriptedLLM(r"Last date to apply: ([^\n]+)", ["news", "mtech admissions"], give_up_on="news.html")
+        result = self.agent(llm).run(self.base + "index.html", "MTech admissions last date to apply?")
+        self.assertEqual(llm.give_up_rechecks, 1)
+        self.assertTrue(result.found, result.steps)
+        self.assertEqual(result.answer, "15 December 2026")
+
+    def test_confirmed_give_up_is_accepted(self):
+        llm = ScriptedLLM(r"CEO email: (\S+)", [], give_up_on="index.html", insist_give_up=True)
+        result = self.agent(llm).run(self.base + "index.html", "What is the CEO's email?")
+        self.assertEqual(llm.give_up_rechecks, 1)
+        self.assertFalse(result.found)
+        self.assertEqual(result.pages_opened, 1)
 
     def test_missing_page_is_reported_not_crashing(self):
         llm = ScriptedLLM(r"never (x)", [])

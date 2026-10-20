@@ -68,4 +68,11 @@ EVIDENCE_RETRY = (
     "If it is not there, choose another action (visit or back). Reply with one JSON object."
 )
 
-JSON_RETRY = "That was not valid JSON. Reply again with exactly one JSON object and no other text."
+GIVE_UP_RETRY = (
+    "You chose give_up, which ends the WHOLE search. You have opened only {pages} page(s) and this website "
+    "still has unvisited links. If only THIS page lacks the answer, choose back (or visit a promising link) "
+    "instead. Choose give_up only if you are confident the WEBSITE does not contain the answer. "
+    "Reply with one JSON object."
+)
+
+JSON_RETRY ="That was not valid JSON. Reply again with exactly one JSON object and no other text."

@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from .browser import FetchError
 from .extractor import link_score, normalize_url, parse_html, rank_links, top_passages, trim_text
-from .prompts import EVIDENCE_RETRY, SYSTEM_PROMPT, build_user_prompt
+from .prompts import EVIDENCE_RETRY, GIVE_UP_RETRY, SYSTEM_PROMPT, build_user_prompt
 
 
 @dataclass
@@ -97,8 +97,17 @@ class WebAgent:
     def _allowed(self, url: str, start_site: str) -> bool:
         return not self.same_domain_only or _site(urlparse(url).hostname) == start_site
 
-    def _decide(self, messages: list[dict], current_text: str, all_texts: list[str]) -> tuple[dict, bool]:
+    def _decide(self, messages: list[dict], current_text: str, all_texts: list[str],
+                can_backtrack: bool = False) -> tuple[dict, bool]:
         decision = self.llm.decide(messages)
+        if decision.get("action") == "give_up" and can_backtrack:
+            # Small models often say "this page doesn't mention it" and give up on the whole site.
+            # Like answers, a give_up gets one re-check while there are still places left to look.
+            self._log("    give_up with unvisited links left; asking the model to confirm")
+            decision = self.llm.decide(messages + [
+                {"role": "assistant", "content": json.dumps(decision, ensure_ascii=False)},
+                {"role": "user", "content": GIVE_UP_RETRY.format(pages=len(all_texts))},
+            ])
         if decision.get("action") != "answer":
             return decision, False
         if is_supported(_as_text(decision.get("evidence")), _as_text(decision.get("answer")), current_text, all_texts):
@@ -183,7 +192,9 @@ class WebAgent:
             messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
 
             try:
-                decision, verified = self._decide(messages, page.text, page_texts)
+                can_backtrack = result.pages_opened < self.max_steps and any(
+                    normalize_url(u) not in visited_keys for _, _, u in frontier)
+                decision, verified = self._decide(messages, page.text, page_texts, can_backtrack)
             except Exception as exc:  # model unreachable or unusable: stop and report it
                 result.error = f"Model error: {exc}"
                 self._log(f"[{step}] {result.error}")
