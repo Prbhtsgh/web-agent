@@ -20,10 +20,25 @@ def norm(text) -> str:
 
 
 def is_correct(answer, expected) -> bool:
+    """`expected` is a list of accepted options. An option is a string that must appear in the answer, or a
+    list of strings that must ALL appear (e.g. ["20", "35"] for "$20.00-$35.00"). [] means the site does not
+    contain the answer, so the right result is "not found"."""
     if answer is None:
-        return expected == []  # [] means "the site does not contain this": the right result is not found
+        return expected == []
     options = expected if isinstance(expected, list) else [expected]
-    return any(norm(option) in norm(answer) for option in options)
+    for option in options:
+        parts = option if isinstance(option, list) else [option]
+        if all(norm(part) in norm(answer) for part in parts):
+            return True
+    return False
+
+
+def breakdown(rows: list[dict], key: str) -> str:
+    """'docs 3/4, shop 5/5, ...' so weak spots by site type or question kind are visible."""
+    groups: dict[str, list[bool]] = {}
+    for row in rows:
+        groups.setdefault(row.get(key) or "-", []).append(row["ok"])
+    return ", ".join(f"{name} {sum(oks)}/{len(oks)}" for name, oks in sorted(groups.items()))
 
 
 def main() -> int:
@@ -46,8 +61,8 @@ def main() -> int:
         for case in cases:
             result = agent.run(case["url"], case["query"])
             ok = is_correct(result.answer if result.found else None, case["expected"])
-            rows.append({"id": case["id"], "ok": ok, "query": case["query"], "expected": case["expected"],
-                         "result": result.to_dict()})
+            rows.append({"id": case["id"], "ok": ok, "category": case.get("category"), "kind": case.get("kind"),
+                         "query": case["query"], "expected": case["expected"], "result": result.to_dict()})
             mark = "PASS" if ok else "FAIL"
             print(f"{mark}  #{case['id']:<3} pages={result.pages_opened:<2} {result.seconds:>6.1f}s  "
                   f"answer={result.answer!r}", flush=True)
@@ -58,6 +73,8 @@ def main() -> int:
     avg_secs = sum(r["result"]["seconds"] for r in rows) / total
     print(f"\nAccuracy: {passed}/{len(rows)} ({100 * passed / total:.0f}%)   "
           f"avg pages: {avg_pages:.1f}   avg time: {avg_secs:.1f}s   model: {settings.llm_model}")
+    print(f"By site type:     {breakdown(rows, 'category')}")
+    print(f"By question kind: {breakdown(rows, 'kind')}")
 
     os.makedirs("results", exist_ok=True)
     path = f"results/eval_{time.strftime('%Y%m%d_%H%M%S')}.json"
