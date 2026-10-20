@@ -74,13 +74,52 @@ def _is_layout_row(row) -> bool:
     return row.find(LAYOUT_TAGS) is not None
 
 
+def _link_label(a, url: str) -> tuple[str, bool]:
+    """What a person would read as the link's name. Returns (label, is_fallback); the fallback is the URL's
+    last path part, used only when the page gives no name at all."""
+    text = " ".join(a.get_text(" ", strip=True).split())
+    named = a.get("aria-label") or a.get("title") or ""
+    if not re.search(r"\w", text):  # empty or only symbols like "›" / "»": prefer the accessible name
+        img = a.find("img", alt=True)
+        text = named or (img["alt"].strip() if img else "") or text
+    if re.fullmatch(r"\d{1,3}", text) and _in_pagination(a, url):
+        text = f"Page {text}"
+    if text:
+        return " ".join(text.split()), False
+    return urlparse(url).path.rstrip("/").rsplit("/", 1)[-1] or url, True
+
+
+def _in_pagination(a, url: str) -> bool:
+    if re.search(r"(^|&)(page|p|pg)=\d", urlparse(url).query):
+        return True
+    for parent in list(a.parents)[:3]:
+        marks = " ".join(parent.get("class") or []) + " " + (parent.get("id") or "") + " " + (parent.get("aria-label") or "")
+        if "pag" in marks.lower():
+            return True
+    return False
+
+
+def _context(a, label: str, limit: int = 60) -> str:
+    """Nearby text that tells identical links apart: "(about)" -> "by Steve Martin"."""
+    for parent in list(a.parents)[:3]:
+        text = " ".join(parent.get_text(" ", strip=True).split())
+        if len(text) > 300:
+            break
+        rest = " ".join(text.replace(label, " ").split())
+        if len(rest) >= 3:
+            return rest[:limit]
+    return ""
+
+
 def parse_html(html: str, base_url: str) -> Page:
     soup = BeautifulSoup(html, "lxml")
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
 
     # 1) Links (collected before cleanup so navigation menus still count).
     links: list[Link] = []
-    seen = {normalize_url(base_url)}
+    anchors = []  # the <a> element behind each link, for context below
+    weak: set[int] = set()  # indexes of links whose label is only a URL fallback
+    seen = {normalize_url(base_url): None}
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
         if not href or href.startswith(("#", "mailto:", "tel:", "javascript:", "data:")):
@@ -92,15 +131,29 @@ def parse_html(html: str, base_url: str) -> Page:
         if parsed.path.lower().endswith(SKIP_EXTENSIONS):
             continue
         key = normalize_url(url)
+        label, is_fallback = _link_label(a, url)
         if key in seen:
+            index = seen[key]
+            # Same page linked twice (e.g. a product image, then its title): keep the better name.
+            if index is not None and index in weak and not is_fallback:
+                links[index].text, anchors[index] = label[:120], a
+                weak.discard(index)
             continue
-        seen.add(key)
-        text = " ".join(a.get_text(" ", strip=True).split())
-        if not text:
-            text = a.get("title") or a.get("aria-label") or ""
-        if not text:
-            text = parsed.path.rstrip("/").rsplit("/", 1)[-1] or url
-        links.append(Link(id=len(links) + 1, text=text[:120], url=url))
+        seen[key] = len(links)
+        if is_fallback:
+            weak.add(len(links))
+        links.append(Link(id=len(links) + 1, text=label[:120], url=url))
+        anchors.append(a)
+
+    # Many links with the same generic name ("(about)", "Read more") are indistinguishable to the model.
+    counts: dict[str, int] = {}
+    for link in links:
+        counts[link.text.lower()] = counts.get(link.text.lower(), 0) + 1
+    for link, a in zip(links, anchors):
+        if counts[link.text.lower()] > 1:
+            context = _context(a, link.text)
+            if context:
+                link.text = f"{link.text} [{context}]"
 
     # 2) Clean text, laid out the way a browser shows it: line breaks only between blocks
     #    (paragraphs, headings, list items...), never inside a sentence or a line of code.

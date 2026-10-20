@@ -227,6 +227,28 @@ class ExtractorTests(unittest.TestCase):
         page = parse_html('<body><div><a href="/a">Home</a><a href="/b">About</a></div></body>', "https://s.test/")
         self.assertIn("Home About", page.text)
 
+    def test_link_labels_are_readable(self):
+        # Real shapes: quotes.toscrape "(about)" links, books.toscrape image link before the title link,
+        # webscraper.io pagination with bare numbers and a "›" arrow.
+        html = """<body>
+        <div class="quote"><span>“A day without sunshine…”</span>
+          <span>by <small class="author">Steve Martin</small> <a href="/author/Steve-Martin">(about)</a></span></div>
+        <div class="quote"><span>“Try not to become a man of success…”</span>
+          <span>by <small class="author">Albert Einstein</small> <a href="/author/Albert-Einstein">(about)</a></span></div>
+        <article><a href="olio_984/index.html"><img alt="Olio" src="x.jpg"></a>
+          <h3><a href="olio_984/index.html" title="Olio">Olio</a></h3></article>
+        <ul class="pagination"><li><a href="?page=2">2</a></li><li><a href="?page=3">3</a></li>
+          <li><a href="?page=2" rel="next" aria-label="Next »">›</a></li></ul>
+        <p>Founded in <a href="/1969">1969</a>.</p></body>"""
+        texts = [l.text for l in parse_html(html, "https://shop.test/cat/").links]
+        self.assertIn("(about) [by Steve Martin]", texts)
+        self.assertIn("(about) [by Albert Einstein]", texts)
+        self.assertIn("Olio", texts)
+        self.assertNotIn("index.html", texts)
+        self.assertIn("Page 2", texts)
+        self.assertIn("Page 3", texts)
+        self.assertIn("1969", texts)  # a number outside pagination stays as it is
+
     def test_rank_links(self):
         page = parse_html(self.HTML, "https://site.test/start")
         self.assertEqual(rank_links(page.links, "what are the fees", 5)[0].text, "Fees and payments")
