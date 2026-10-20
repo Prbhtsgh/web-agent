@@ -111,6 +111,37 @@ def _context(a, label: str, limit: int = 60) -> str:
     return ""
 
 
+RECORD_TAGS = ["div", "li", "article"]  # not <section>: sections are document structure, not records
+
+
+def _flatten_records(soup, max_chars: int = 300) -> None:
+    """Put each small repeated record (a product card, a quote card...) on one line: "$88.99 · IdeaTab A3500L".
+
+    Without this, records run together line by line and neighbours bleed into each other: on webscraper.io the
+    model paired a price with the product listed before it, and on quotes.toscrape a passage started with the
+    previous quote's "Tags: ...eleanor-roosevelt" right above a Steve Martin quote. A record is one of 3+
+    siblings with the same tag and class. Only the innermost records are flattened (scrapethissite.com puts
+    countries in rows of 3; flattening the rows would merge 3 countries). Runs after line layout, so inline
+    text is never split."""
+    records = []
+    for parent in soup.find_all(True):
+        children = parent.find_all(RECORD_TAGS, recursive=False)
+        counts: dict[tuple, int] = {}
+        for child in children:
+            key = (child.name, tuple(child.get("class") or []))
+            counts[key] = counts.get(key, 0) + 1
+        records += [c for c in children if counts[(c.name, tuple(c.get("class") or []))] >= 3]
+    record_ids = {id(r) for r in records}
+    for record in records:
+        if any(id(d) in record_ids for d in record.find_all(RECORD_TAGS)):
+            continue  # contains smaller records: flatten those instead
+        parts = [" ".join(line.split()).removeprefix("## ").strip() for line in record.get_text().splitlines()]
+        parts = [part for part in parts if part and part != "##"]
+        line = " · ".join(parts)
+        if len(parts) >= 2 and len(line) <= max_chars:
+            record.replace_with(soup.new_string(f"\n{line}\n"))
+
+
 def parse_html(html: str, base_url: str) -> Page:
     soup = BeautifulSoup(html, "lxml")
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
@@ -186,6 +217,7 @@ def parse_html(html: str, base_url: str) -> Page:
     for tag in soup.find_all(BLOCK_TAGS):
         tag.insert_before(soup.new_string("\n"))
         tag.insert_after(soup.new_string("\n"))
+    _flatten_records(soup)
 
     body = soup.body or soup
     lines: list[str] = []

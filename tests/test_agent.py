@@ -272,6 +272,32 @@ class ExtractorTests(unittest.TestCase):
         self.assertIn("Page 3", texts)
         self.assertIn("1969", texts)  # a number outside pagination stays as it is
 
+    def test_repeated_records_stay_on_one_line(self):
+        # Real shapes: webscraper.io cards (price before name), quotes.toscrape quotes followed by their tags,
+        # scrapethissite.com countries grouped in rows of 3. Records used to bleed into their neighbours.
+        def card(price, name, desc):
+            return (f'<div class="col-md-4"><div class="card thumbnail"><div class="caption">'
+                    f'<h4 class="price">{price}</h4><h4><a class="title" href="/p/{name}">{name}</a></h4>'
+                    f'<p class="description">{desc}</p></div><p class="review-count">7 reviews</p></div></div>')
+        def quote(text, author, tags):
+            return (f'<div class="quote"><span class="text">{text}</span> <span>by <small>{author}</small> '
+                    f'<a href="/author/{author}">(about)</a></span><div class="tags">Tags: {tags}</div></div>')
+        def country(name, capital):
+            return f'<div class="col-md-4 country"><h3>{name}</h3><div>Capital: {capital}</div></div>'
+        html = ("<body><div class='row'>" + card("$537.99", "iPad Mini Reti...", "Wi-Fi, 32GB")
+                + card("$88.99", "IdeaTab A3500L", "Black, 7in") + card("$69.99", "Lenovo IdeaTab", "7in") + "</div>"
+                + quote("“A woman is like a tea bag.”", "Eleanor Roosevelt", "misattributed-eleanor-roosevelt")
+                + quote("“A day without sunshine is like night.”", "Steve Martin", "humor")
+                + quote("“Try not to become a man of success.”", "Albert Einstein", "success")
+                + "".join(f"<div class='row'>{country(a, a + ' City')}{country(b, b + ' City')}{country(c, c + ' City')}</div>"
+                          for a, b, c in [("Andorra", "Oman", "Chad"), ("Peru", "Mali", "Fiji"), ("Iran", "Laos", "Togo")])
+                + "<dl class='py method'><dt>str.upper()</dt><dd>Return a copy.</dd></dl>" * 3 + "</body>")
+        lines = parse_html(html, "https://shop.test/").text.splitlines()
+        self.assertIn("$88.99 · IdeaTab A3500L · Black, 7in · 7 reviews", lines)
+        self.assertIn("“A day without sunshine is like night.” by Steve Martin (about) · Tags: humor", lines)
+        self.assertIn("Andorra · Capital: Andorra City", lines)  # one country per line, not one row of 3
+        self.assertIn("## str.upper()", lines)  # docs definitions keep their heading marker
+
     def test_rank_links(self):
         page = parse_html(self.HTML, "https://site.test/start")
         self.assertEqual(rank_links(page.links, "what are the fees", 5)[0].text, "Fees and payments")
