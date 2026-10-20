@@ -12,6 +12,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from webagent import Browser, WebAgent
+from webagent.agent import is_supported
 from webagent.extractor import normalize_url, parse_html, rank_links, top_passages, trim_text
 from webagent.llm import parse_json
 
@@ -27,13 +28,16 @@ class ScriptedLLM:
     """Pretends to be the model: answers when a regex matches the page text, otherwise clicks links
     whose text contains the next keyword. Records every prompt so tests can inspect them."""
 
-    def __init__(self, answer_regex, keywords, bad_evidence_first=False, give_up_on=None, insist_give_up=False):
+    def __init__(self, answer_regex, keywords, bad_evidence_first=False, give_up_on=None, insist_give_up=False,
+                 invent_number=None):
         self.answer_regex = re.compile(answer_regex, re.I)
         self.keywords = [k.lower() for k in keywords]
         self.bad_evidence_first = bad_evidence_first
         self.give_up_on = give_up_on  # URL fragment of a page where it wrongly gives up on the whole site
         self.insist_give_up = insist_give_up
         self.give_up_rechecks = 0
+        self.invent_number = invent_number  # "first" or "always": real quote + a number that isn't in it
+        self.evidence_rechecks = 0
         self.prompts = []
 
     def decide(self, messages):
@@ -48,7 +52,10 @@ class ScriptedLLM:
         if self.give_up_on and self.give_up_on in page_url:
             return {"action": "give_up", "reason": "The page does not mention it."}
         if messages[-1]["role"] == "user" and "evidence was not found" in messages[-1]["content"]:
+            self.evidence_rechecks += 1
             self.bad_evidence_first = False
+            if self.invent_number == "first":
+                self.invent_number = None
             prompt = messages[1]["content"]
         text = prompt.split("PAGE TEXT:\n", 1)[1].split("\n\nLINKS:\n", 1)[0]
         links = re.findall(r"^\[(\d+)\] (.+?) \((\S+)\)$", prompt.split("\n\nLINKS:\n", 1)[1], re.M)
@@ -56,7 +63,8 @@ class ScriptedLLM:
         match = self.answer_regex.search(text)
         if match:
             evidence = "something not on the page" if self.bad_evidence_first else match.group(0)
-            return {"action": "answer", "answer": match.group(1), "evidence": evidence}
+            answer = "500" if self.invent_number else match.group(1)
+            return {"action": "answer", "answer": answer, "evidence": evidence}
         for keyword in self.keywords:
             for link_id, link_text, _ in links:
                 if keyword in link_text.lower():
@@ -144,11 +152,38 @@ class AgentTests(unittest.TestCase):
         self.assertFalse(result.found)
         self.assertEqual(result.pages_opened, 1)
 
+    def test_made_up_number_is_rechecked_and_corrected(self):
+        # Real failure (sqlite.org): a real quote from the page, paired with a number that isn't in it.
+        llm = ScriptedLLM(r"Last date to apply: ([^\n]+)", ["mtech admissions", "admissions"], invent_number="first")
+        result = self.agent(llm).run(self.base + "index.html", "MTech deadline?")
+        self.assertEqual(llm.evidence_rechecks, 1)
+        self.assertEqual(result.answer, "15 December 2026")
+        self.assertTrue(result.verified)
+
+    def test_unsupported_answer_is_rejected_not_returned(self):
+        llm = ScriptedLLM(r"Last date to apply: ([^\n]+)", ["mtech admissions", "admissions"], invent_number="always")
+        result = self.agent(llm, max_steps=4).run(self.base + "index.html", "MTech deadline?")
+        self.assertFalse(result.found, result.steps)
+        self.assertIsNone(result.answer)
+        self.assertIn("rejected_answer", [s["action"] for s in result.steps])
+
     def test_missing_page_is_reported_not_crashing(self):
         llm = ScriptedLLM(r"never (x)", [])
         result = self.agent(llm, max_steps=2).run(self.base + "does-not-exist.html", "anything")
         self.assertEqual(result.steps[0]["action"], "error")
         self.assertFalse(result.found)
+
+
+class VerificationTests(unittest.TestCase):
+    PAGE = "Maximum Number Of Columns\nThe default setting for SQLITE_MAX_COLUMN is 2,000. You can raise it to 32767."
+
+    def test_numbers_in_answer_must_be_in_the_quote(self):
+        quote = "The default setting for SQLITE_MAX_COLUMN is 2,000."
+        self.assertTrue(is_supported(quote, "2000", self.PAGE, [self.PAGE]))
+        self.assertTrue(is_supported(quote, "2,000 columns", self.PAGE, [self.PAGE]))
+        self.assertFalse(is_supported(quote, "500", self.PAGE, [self.PAGE]))
+        self.assertTrue(is_supported("Maximum Number Of Columns", "32767", self.PAGE, [self.PAGE]))  # answer is on the page
+        self.assertTrue(is_supported(quote, "the column limit", self.PAGE, [self.PAGE]))  # no numbers: quote is enough
 
 
 class ExtractorTests(unittest.TestCase):

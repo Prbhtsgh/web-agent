@@ -63,8 +63,8 @@ Reply with one JSON object."""
 
 
 EVIDENCE_RETRY = (
-    "Your evidence was not found word-for-word in the page text. "
-    "Check the PAGE TEXT again. If the answer really is there, reply again with an exact quote as evidence. "
+    "Your evidence was not found word-for-word in the page text, or it does not contain the values in your answer. "
+    "Check the PAGE TEXT again. If the answer really is there, reply again with an exact quote that contains it. "
     "If it is not there, choose another action (visit or back). Reply with one JSON object."
 )
 

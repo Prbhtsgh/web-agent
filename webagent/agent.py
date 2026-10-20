@@ -69,10 +69,22 @@ def _as_int(value) -> int | None:
         return None
 
 
+def _numbers(text: str) -> list[str]:
+    """'£1,250.50 on 3 May' -> ['1250.50', '3']"""
+    return [n.replace(",", "") for n in re.findall(r"\d[\d,]*(?:\.\d+)?", text or "")]
+
+
 def is_supported(evidence: str | None, answer: str | None, current_text: str, all_texts: list[str]) -> bool:
+    """True when the answer is backed by the website: the evidence is a real quote from the current page that
+    contains every number in the answer, or else the answer itself appears on a visited page.
+
+    The number rule matters: small models sometimes pair a real quote with a number they made up (sqlite.org:
+    answer "500", quote about column limits that says nothing of 500, and 500 nowhere on the page)."""
     current = _clean(current_text)
     if evidence and len(_clean(evidence)) >= 3 and _clean(evidence) in current:
-        return True
+        quoted = _clean(evidence).replace(",", "")
+        if all(n in quoted for n in _numbers(answer)):
+            return True
     if answer and len(_clean(answer)) >= 2:
         needle = _clean(answer)
         return any(needle in _clean(t) for t in all_texts)
@@ -205,6 +217,15 @@ class WebAgent:
                 notes = _as_text(decision["notes"])[:500]
             record = {"step": step, "url": final_url, "action": action,
                       "detail": _as_text(decision.get("reason") or decision.get("answer")) or ""}
+
+            if action == "answer" and not verified:
+                # Not backed by the page even after a re-check: likely made up. Keep looking instead.
+                record["action"] = "rejected_answer"
+                record["detail"] = f"unsupported answer {_as_text(decision.get('answer'))!r}; backtracking"
+                result.steps.append(record)
+                self._log(f"    {record['detail']}")
+                next_url = None
+                continue
 
             if action == "answer":
                 result.found = True
