@@ -105,7 +105,7 @@ def is_supported(evidence: str | None, answer: str | None, current_text: str, al
 
 class WebAgent:
     def __init__(self, llm, browser, max_steps=8, max_page_chars=6000, max_links=40,
-                 same_domain_only=True, verbose=True):
+                 same_domain_only=True, verbose=True, max_errors=8):
         self.llm = llm
         self.browser = browser
         self.max_steps = max_steps
@@ -113,6 +113,7 @@ class WebAgent:
         self.max_links = max_links
         self.same_domain_only = same_domain_only
         self.verbose = verbose
+        self.max_errors = max_errors  # pages that fail to load don't use up max_steps, but this caps them
 
     def _log(self, message: str) -> None:
         if self.verbose:
@@ -164,6 +165,7 @@ class WebAgent:
         order = itertools.count()
         notes = ""
         next_url: str | None = url
+        errors = 0
 
         self._log(f"QUESTION: {query}\nSTART:    {url}")
         while result.pages_opened < self.max_steps:
@@ -183,17 +185,27 @@ class WebAgent:
                 next_url = None
                 continue
             visited_keys.add(key)
-            result.pages_opened += 1
-            step = result.pages_opened
 
             try:
                 final_url, html = self.browser.fetch(next_url)
+                if not self._allowed(final_url, start_site):
+                    # e.g. an nps.gov link that redirected to a Microsoft login page
+                    raise FetchError(f"Redirected off the website to {urlparse(final_url).hostname}")
             except FetchError as exc:
-                self._log(f"[{step}] ERROR {exc}")
-                result.steps.append({"step": step, "url": next_url, "action": "error", "detail": str(exc)})
+                # Broken, blocked (e.g. HTTP 403 from bot protection) or off-site pages teach us nothing,
+                # so they don't use up the page budget (ox.ac.uk: 6 of 8 pages were 403s).
+                errors += 1
+                self._log(f"[-] ERROR {exc}")
+                result.steps.append({"step": result.pages_opened, "url": next_url, "action": "error", "detail": str(exc)})
                 next_url = None
+                if errors >= self.max_errors:
+                    result.error = f"Stopped: {errors} pages could not be loaded (last: {exc})"
+                    result.steps.append({"step": result.pages_opened, "action": "stop", "detail": result.error})
+                    break
                 continue
 
+            result.pages_opened += 1
+            step = result.pages_opened
             visited_keys.add(normalize_url(final_url))
             result.visited.append(final_url)
             page = parse_html(html, final_url)

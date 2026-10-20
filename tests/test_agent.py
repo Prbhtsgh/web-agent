@@ -180,6 +180,29 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(result.answer, "15 December 2026", result.steps)
         self.assertIn("i.e. not found on this page", " ".join(s["detail"] for s in result.steps))
 
+    def test_broken_pages_do_not_use_up_the_page_budget(self):
+        # Real failure (ox.ac.uk): 6 of 8 page slots went to HTTP 403s, leaving no room to find the answer.
+        llm = ScriptedLLM(r"Last date to apply: ([^\n]+)", ["broken", "mtech admissions", "admissions"])
+        result = self.agent(llm, max_steps=3).run(self.base + "links.html", "MTech deadline?")
+        self.assertEqual(result.answer, "15 December 2026", result.steps)
+        self.assertEqual(result.pages_opened, 3)
+        self.assertEqual([s["action"] for s in result.steps].count("error"), 4)
+
+    def test_stops_when_too_many_pages_fail(self):
+        llm = ScriptedLLM(r"never (x)", ["broken"])
+        agent = WebAgent(llm=llm, browser=self.browser, max_steps=8, verbose=False, max_errors=2)
+        result = agent.run(self.base + "links.html", "anything")
+        self.assertFalse(result.found)
+        self.assertIn("could not be loaded", result.error)
+
+    def test_redirect_to_another_website_is_not_read(self):
+        # Real failure (nps.gov): a link redirected to a Microsoft login page, which the agent then read.
+        llm = ScriptedLLM(r"Admissions Office \| ([+\d ]+)", [])
+        result = self.agent(llm, max_steps=2).run(self.base + "redirect.html", "Phone number of the admissions office?")
+        self.assertFalse(result.found)
+        self.assertEqual(result.steps[0]["action"], "error")
+        self.assertIn("Redirected off the website", result.steps[0]["detail"])
+
     def test_missing_page_is_reported_not_crashing(self):
         llm = ScriptedLLM(r"never (x)", [])
         result = self.agent(llm, max_steps=2).run(self.base + "does-not-exist.html", "anything")
