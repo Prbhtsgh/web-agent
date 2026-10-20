@@ -12,7 +12,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from webagent import Browser, WebAgent
-from webagent.agent import is_supported
+from webagent.agent import is_non_answer, is_supported
 from webagent.extractor import normalize_url, parse_html, rank_links, top_passages, trim_text
 from webagent.llm import parse_json
 
@@ -29,7 +29,7 @@ class ScriptedLLM:
     whose text contains the next keyword. Records every prompt so tests can inspect them."""
 
     def __init__(self, answer_regex, keywords, bad_evidence_first=False, give_up_on=None, insist_give_up=False,
-                 invent_number=None):
+                 invent_number=None, non_answer_on=None):
         self.answer_regex = re.compile(answer_regex, re.I)
         self.keywords = [k.lower() for k in keywords]
         self.bad_evidence_first = bad_evidence_first
@@ -38,6 +38,7 @@ class ScriptedLLM:
         self.give_up_rechecks = 0
         self.invent_number = invent_number  # "first" or "always": real quote + a number that isn't in it
         self.evidence_rechecks = 0
+        self.non_answer_on = non_answer_on  # URL fragment of a page where it "answers" None with a real quote
         self.prompts = []
 
     def decide(self, messages):
@@ -49,6 +50,9 @@ class ScriptedLLM:
                 return {"action": "give_up", "reason": "still sure"}
             return {"action": "back", "reason": "only this page lacks it"}
         page_url = re.search(r"^CURRENT PAGE URL: (\S+)", prompt, re.M).group(1)
+        if self.non_answer_on and self.non_answer_on in page_url:
+            first_line = prompt.split("PAGE TEXT:\n", 1)[1].splitlines()[0]
+            return {"action": "answer", "answer": "None", "evidence": first_line}
         if self.give_up_on and self.give_up_on in page_url:
             return {"action": "give_up", "reason": "The page does not mention it."}
         if messages[-1]["role"] == "user" and "evidence was not found" in messages[-1]["content"]:
@@ -167,6 +171,15 @@ class AgentTests(unittest.TestCase):
         self.assertIsNone(result.answer)
         self.assertIn("rejected_answer", [s["action"] for s in result.steps])
 
+    def test_none_answer_means_keep_searching(self):
+        # Real failure (scrapethissite.com): asked about a country not in the list, the model answered "None",
+        # quoting "Capital: None" from another country's row.
+        llm = ScriptedLLM(r"Last date to apply: ([^\n]+)", ["admissions", "mtech admissions"],
+                          non_answer_on="admissions.html")
+        result = self.agent(llm).run(self.base + "index.html", "MTech deadline?")
+        self.assertEqual(result.answer, "15 December 2026", result.steps)
+        self.assertIn("i.e. not found on this page", " ".join(s["detail"] for s in result.steps))
+
     def test_missing_page_is_reported_not_crashing(self):
         llm = ScriptedLLM(r"never (x)", [])
         result = self.agent(llm, max_steps=2).run(self.base + "does-not-exist.html", "anything")
@@ -184,6 +197,13 @@ class VerificationTests(unittest.TestCase):
         self.assertFalse(is_supported(quote, "500", self.PAGE, [self.PAGE]))
         self.assertTrue(is_supported("Maximum Number Of Columns", "32767", self.PAGE, [self.PAGE]))  # answer is on the page
         self.assertTrue(is_supported(quote, "the column limit", self.PAGE, [self.PAGE]))  # no numbers: quote is enough
+
+
+    def test_non_answers(self):
+        for text in ["None", "none.", "N/A", "Not mentioned", "not found", "No information available", ""]:
+            self.assertTrue(is_non_answer(text), text)
+        for text in ["Nonesuch Press", "1969", "Not before 9am", "Santa Clara", "No. 10 Downing Street"]:
+            self.assertFalse(is_non_answer(text), text)
 
 
 class ExtractorTests(unittest.TestCase):

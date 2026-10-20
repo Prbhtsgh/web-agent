@@ -69,6 +69,18 @@ def _as_int(value) -> int | None:
         return None
 
 
+NON_ANSWER = re.compile(
+    r"(none|null|nil|n/?a|unknown|not (found|mentioned|available|specified|stated|provided|listed|given)"
+    r"|no (information|answer|data)( (found|available))?)",
+)
+
+
+def is_non_answer(answer: str | None) -> bool:
+    """'None', 'N/A', 'Not mentioned'... Small models sometimes use the answer action to say they found nothing
+    (scrapethissite.com: asked about a country not in the list, it answered "None" from another row)."""
+    return NON_ANSWER.fullmatch(_clean(answer or "")) is not None or not _clean(answer or "")
+
+
 def _numbers(text: str) -> list[str]:
     """'£1,250.50 on 3 May' -> ['1250.50', '3']"""
     return [n.replace(",", "") for n in re.findall(r"\d[\d,]*(?:\.\d+)?", text or "")]
@@ -120,6 +132,10 @@ class WebAgent:
                 {"role": "assistant", "content": json.dumps(decision, ensure_ascii=False)},
                 {"role": "user", "content": GIVE_UP_RETRY.format(pages=len(all_texts))},
             ])
+        if decision.get("action") == "answer" and is_non_answer(_as_text(decision.get("answer"))):
+            # "Nothing here" is not an answer: treat it as leaving this page and keep searching.
+            return {"action": "back", "notes": decision.get("notes"),
+                    "reason": f"answered {_as_text(decision.get('answer'))!r}, i.e. not found on this page"}, False
         if decision.get("action") != "answer":
             return decision, False
         if is_supported(_as_text(decision.get("evidence")), _as_text(decision.get("answer")), current_text, all_texts):
