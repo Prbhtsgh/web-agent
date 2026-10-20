@@ -1,0 +1,44 @@
+[
+  {
+    "id": 1,
+    "url": "https://books.toscrape.com/",
+    "query": "What is the price of the book 'A Light in the Attic'?",
+    "expected": ["51.77"]
+  },
+  {
+    "id": 2,
+    "url": "https://books.toscrape.com/",
+    "query": "How many books are in stock for 'A Light in the Attic'?",
+    "expected": ["22"]
+  },
+  {
+    "id": 3,
+    "url": "https://quotes.toscrape.com/",
+    "query": "Who said 'The world as we have created it is a process of our thinking'?",
+    "expected": ["Einstein"]
+  },
+  {
+    "id": 4,
+    "url": "https://quotes.toscrape.com/",
+    "query": "When was Albert Einstein born, according to his author page?",
+    "expected": ["March 14, 1879", "1879"]
+  },
+  {
+    "id": 5,
+    "url": "https://en.wikipedia.org/wiki/AMD",
+    "query": "In what year was AMD founded?",
+    "expected": ["1969"]
+  },
+  {
+    "id": 6,
+    "url": "https://docs.python.org/3/",
+    "query": "What does the str.removeprefix method do?",
+    "expected": ["prefix"]
+  },
+  {
+    "id": 7,
+    "url": "https://books.toscrape.com/",
+    "query": "What is the email address of the bookstore's CEO?",
+    "expected": []
+  }
+]
