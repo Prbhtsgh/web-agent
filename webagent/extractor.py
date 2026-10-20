@@ -317,15 +317,36 @@ def trim_text(text: str, query: str, max_chars: int) -> str:
     return "\n".join(out)[:max_chars]
 
 
-def link_score(link: Link, query: str) -> int:
-    query_words = set(tokenize(query))
-    words = set(tokenize(link.text)) | set(tokenize(urlparse(link.url).path))
-    exact = len(query_words & words)
-    partial = sum(1 for q in query_words for w in words if q != w and (q in w or w in q) and min(len(q), len(w)) >= 3)
-    return exact * 3 + partial
+def _stem(word: str) -> str:
+    """Crude plural folding so "pass" matches "Passes" and "fee" matches "fees"."""
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 4 and word.endswith(("sses", "ches", "shes", "xes")):
+        return word[:-2]
+    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return word
 
 
-def rank_links(links: list[Link], query: str, limit: int) -> list[Link]:
+def link_score(link: Link, query: str, title: str = "") -> float:
+    """How well a link's text and URL match the question.
+
+    Question words that also appear in the current page's title (usually the site's own name, e.g.
+    "Yellowstone National Park") describe every link on the site, so they count a third as much. Without
+    this, on nps.gov "Birth of a National Park" outranked "Fees & Passes" (rank 47 of 327, never shown)."""
+    title_words = {_stem(w) for w in tokenize(title)}
+    words = {_stem(w) for w in tokenize(link.text) + tokenize(urlparse(link.url).path)}
+    score = 0.0
+    for q in {_stem(w) for w in tokenize(query)}:
+        weight = 1.0 if q in title_words else 3.0
+        if q in words:
+            score += weight
+        elif any((q in w or w in q) and min(len(q), len(w)) >= 3 for w in words):
+            score += weight / 3
+    return score
+
+
+def rank_links(links: list[Link], query: str, limit: int, title: str = "") -> list[Link]:
     """Most query-relevant links first; original page order breaks ties."""
-    ranked = sorted(links, key=lambda link: (-link_score(link, query), link.id))
+    ranked = sorted(links, key=lambda link: (-link_score(link, query, title), link.id))
     return ranked[:limit]

@@ -220,8 +220,8 @@ class WebAgent:
                 link_key = normalize_url(link.url)
                 if link_key not in queued:
                     queued.add(link_key)
-                    heapq.heappush(frontier, (-link_score(link, query), next(order), link.url))
-            shown = rank_links(candidates, query, self.max_links)
+                    heapq.heappush(frontier, (-link_score(link, query, page.title), next(order), link.url))
+            shown = rank_links(candidates, query, self.max_links, page.title)
 
             prompt = build_user_prompt(
                 query=query, page_url=final_url, page_title=page.title,

@@ -276,6 +276,18 @@ class ExtractorTests(unittest.TestCase):
         page = parse_html(self.HTML, "https://site.test/start")
         self.assertEqual(rank_links(page.links, "what are the fees", 5)[0].text, "Fees and payments")
 
+    def test_site_name_words_do_not_bury_the_right_link(self):
+        # Shaped like nps.gov: the question repeats the site's name ("Yellowstone National Park"), dozens of
+        # links contain those words, and "Fees & Passes" (plural) comes late in the menu.
+        menu = "".join(f'<a href="/yell/learn/yellowstone-topic-{i}.htm">Yellowstone National Park topic {i}</a>'
+                       for i in range(60))
+        html = f"""<html><head><title>Yellowstone National Park (U.S. National Park Service)</title></head>
+        <body>{menu}<a href="/yell/learn/yellowstoneestablishment.htm">Birth of a National Park</a>
+        <a href="/yell/planyourvisit/fees.htm">Fees &amp; Passes</a></body></html>"""
+        page = parse_html(html, "https://www.nps.test/yell/index.htm")
+        question = "How much does a standard entrance pass to Yellowstone National Park cost?"
+        self.assertEqual(rank_links(page.links, question, 40, page.title)[0].text, "Fees & Passes")
+
     def test_trim_keeps_relevant_part(self):
         filler = "\n".join(f"Unrelated line number {i} about nothing in particular." for i in range(400))
         text = "Page heading\n" + filler + "\nThe hostel fee is 60000 per year.\n" + filler

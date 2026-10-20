@@ -25,7 +25,7 @@ def main() -> None:
     print("=== MOST RELEVANT PASSAGES ===\n" + (top_passages(page.text, query) or "(none)"))
     print("\n=== PAGE TEXT SENT TO MODEL ===\n" + trim_text(page.text, query, settings.max_page_chars))
     print("\n=== TOP LINKS ===")
-    for link in rank_links(page.links, query, 15):
+    for link in rank_links(page.links, query, 15, page.title):
         print(f"[{link.id}] {link.text} ({link.url})")
 
 
